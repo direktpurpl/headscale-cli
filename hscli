@@ -34,11 +34,11 @@ menu() {
   echo ""
   local i=1
   while [[ $# -gt 0 ]]; do
-    printf "  ${GREEN}%s${NC}) %s\n" "$i" "$1"
+    echo -e "  ${GREEN}${i}${NC}) $1"
     shift
     i=$((i + 1))
   done
-  echo "  ${GREEN}0${NC}) Назад"
+  echo -e "  ${GREEN}0${NC}) Назад"
   echo ""
 }
 
