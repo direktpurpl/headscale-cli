@@ -1,946 +1,277 @@
 #!/usr/bin/env bash
 #
-# hscli — Интерактивная CLI-утилита для управления Headscale v0.28.0
-# Автор: direkt
-# Версия: 0.2.0
+# hscli — компактный CLI для Headscale (Docker)
+# Версия: v0.3.0 — текстовое меню, ввод цифрами
 #
 
 set -euo pipefail
 
-# ============================================================
-# Конфигурация
-# ============================================================
-HEADSCALE_CONTAINER="${HEADSCALE_CONTAINER:-headscale}"
-HEADSCALE_NAMESPACE="${HEADSCALE_NAMESPACE:-}"
-VERSION="0.2.0"
+VERSION="v0.3.0"
+CONTAINER="${HEADSCALE_CONTAINER:-headscale}"
 
-# ============================================================
-# whiptail настройки
-# ============================================================
-export NEWT_COLORS='
-    root=white,black
-    border=black,lightgray
-    window=lightgray,lightgray
-    shadow=black,gray
-    title=white,cyan
-    roottext=white,black
-    button=black,cyan
-    compactbutton=white,blue
-    listbox=white,black
-    compactlistbox=white,black
-    actlistbox=black,cyan
-    actlistboxsel=black,cyan
-    entry=black,cyan
-    disentry=gray,lightgray
-    label=white,black
-    actlabel=white,blue
-    checkbox=white,black
-    actcheckbox=black,cyan
-    radio=white,black
-    actradio=black,cyan
-    helpline=white,blue
-    roottext=white,black
-'
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
 
-WIDTH=75
-HEIGHT=20
+hs() { docker exec "$CONTAINER" headscale "$@" 2>&1; }
+hsj() { hs --output json "$@" 2>/dev/null; }
 
-# ============================================================
-# Утилиты
-# ============================================================
+sep() { echo -e "${CYAN}────────────────────────────────────────${NC}"; }
 
-check_deps() {
-    local missing=()
-    for cmd in docker jq whiptail; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing+=("$cmd")
-        fi
-    done
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        whiptail --msgbox --title "Ошибка" "Отсутствуют необходимые утилиты:\n${missing[*]}" 10 60
-        exit 1
-    fi
+hdr() {
+  echo ""
+  sep
+  echo -e "  ${GREEN}Headscale CLI${NC} ${VERSION}  │  контейнер: ${YELLOW}${CONTAINER}${NC}"
+  sep
 }
 
-check_headscale() {
-    if ! docker ps --format '{{.Names}}' | grep -q "^${HEADSCALE_CONTAINER}$"; then
-        whiptail --msgbox --title "Ошибка" \
-            "Контейнер Headscale '${HEADSCALE_CONTAINER}' не запущен или не найден.\n\nУкажите правильное имя через ENV:\nHEADSCALE_CONTAINER=<name>" 12 60
-        exit 1
-    fi
+menu() {
+  local title="$1"; shift
+  echo ""
+  echo -e "  ${YELLOW}${title}${NC}"
+  echo ""
+  local i=1
+  while [[ $# -gt 0 ]]; do
+    printf "  ${GREEN}%s${NC}) %s\n" "$i" "$1"
+    shift
+    i=$((i + 1))
+  done
+  echo "  ${GREEN}0${NC}) Назад"
+  echo ""
 }
 
-hs_exec() {
-    docker exec "${HEADSCALE_CONTAINER}" headscale "$@" 2>&1
+ask() {
+  local prompt="$1"
+  local val
+  read -rp "  ${prompt}: " val
+  echo "$val"
 }
 
-hs_exec_json() {
-    hs_exec --output json "$@" 2>/dev/null
-}
+wait_key() { echo ""; read -rsp "  Нажмите Enter..." r; echo ""; }
 
-show_output() {
-    local title="$1"
-    local content="$2"
-    whiptail --msgbox --title "$title" "$content" 25 80
-}
+ok()  { echo -e "  ${GREEN}✅ $*${NC}"; }
+err() { echo -e "  ${RED}❌ $*${NC}"; }
 
-confirm_action() {
-    local msg="$1"
-    whiptail --yesno --title "Подтверждение" "$msg" 10 60
-}
-
-input_box() {
-    local title="$1"
-    local prompt="$2"
-    local default="${3:-}"
-    whiptail --inputbox --title "$title" "$prompt" 10 60 "$default" 3>&1 1>&2 2>&3
-}
-
-menu_box() {
-    local title="$1"
-    local prompt="$2"
-    local height="${3:-$HEIGHT}"
-    shift 3
-    whiptail --menu --title "$title" "$prompt" "$height" 60 10 "$@" 3>&1 1>&2 2>&3
-}
-
-# ============================================================
-# Вспомогательные функции
-# ============================================================
-
-select_node() {
-    local nodes_json
-    nodes_json=$(hs_exec_json node list) || true
-    
-    if [[ -z "$nodes_json" || "$nodes_json" == *"null"* || "$nodes_json" == *"[]"* ]]; then
-        whiptail --msgbox --title "Узлы" "Нет зарегистрированных узлов" 8 60
-        return 1
-    fi
-    
-    local menu_items=()
-    while IFS= read -r line; do
-        local id name ip
-        id=$(echo "$line" | jq -r '.id // "?"')
-        name=$(echo "$line" | jq -r '.name // "?"')
-        ip=$(echo "$line" | jq -r '(.ip_addresses // [] | join(", ")) // "?"')
-        menu_items+=("$id" "$name ($ip)")
-    done < <(echo "$nodes_json" | jq -c '.[]')
-    
-    if [[ ${#menu_items[@]} -eq 0 ]]; then
-        whiptail --msgbox --title "Узлы" "Нет зарегистрированных узлов" 8 60
-        return 1
-    fi
-    
-    menu_box "Выбор узла" "Выберите узел:" 15 "${menu_items[@]}"
-}
-
-select_user() {
-    local users_json
-    users_json=$(hs_exec_json user list) || true
-    
-    if [[ -z "$users_json" || "$users_json" == *"null"* || "$users_json" == *"[]"* ]]; then
-        whiptail --msgbox --title "Пользователи" "Нет пользователей" 8 60
-        return 1
-    fi
-    
-    local menu_items=()
-    while IFS= read -r line; do
-        local id name
-        id=$(echo "$line" | jq -r '.id // "?"')
-        name=$(echo "$line" | jq -r '.name // "?"')
-        menu_items+=("$name" "$id")
-    done < <(echo "$users_json" | jq -c '.[]')
-    
-    menu_box "Выбор пользователя" "Выберите пользователя:" "" "${menu_items[@]}"
-}
-
-select_route() {
-    local routes_json
-    routes_json=$(hs_exec_json routes list) || true
-    
-    if [[ -z "$routes_json" || "$routes_json" == *"null"* || "$routes_json" == *"[]"* ]]; then
-        whiptail --msgbox --title "Маршруты" "Нет маршрутов" 8 60
-        return 1
-    fi
-    
-    local menu_items=()
-    while IFS= read -r line; do
-        local id prefix enabled
-        id=$(echo "$line" | jq -r '.id // "?"')
-        prefix=$(echo "$line" | jq -r '.prefix // "?"')
-        enabled=$(echo "$line" | jq -r 'if .enabled then "[ВКЛ]" else "[ВЫКЛ]" end')
-        menu_items+=("$id" "$prefix $enabled")
-    done < <(echo "$routes_json" | jq -c '.[]')
-    
-    menu_box "Выбор маршрута" "Выберите маршрут:" "" "${menu_items[@]}"
-}
-
-select_namespace() {
-    local ns_json
-    ns_json=$(hs_exec_json namespaces list) || true
-    
-    if [[ -z "$ns_json" || "$ns_json" == *"null"* || "$ns_json" == *"[]"* ]]; then
-        whiptail --msgbox --title "Namespaces" "Нет namespaces" 8 60
-        return 1
-    fi
-    
-    local menu_items=()
-    while IFS= read -r line; do
-        local id name
-        id=$(echo "$line" | jq -r '.id // "?"')
-        name=$(echo "$line" | jq -r '.name // "?"')
-        menu_items+=("$name" "ID: $id")
-    done < <(echo "$ns_json" | jq -c '.[]')
-    
-    menu_box "Выбор namespace" "Выберите namespace:" "" "${menu_items[@]}"
-}
-
-show_loading() {
-    local msg="$1"
-    whiptail --infobox "$msg" 5 50
-}
-
-# ============================================================
-# Главное меню
-# ============================================================
-
-main_menu() {
-    local choice
-    while choice=$(menu_box \
-        "Headscale CLI v${VERSION}" \
-        "Выберите раздел:" 16 \
-        "users"      "👤  Пользователи" \
-        "tags"       "🏷  Теги (ACL)" \
-        "nodes"      "🖥  Узлы (Nodes)" \
-        "routes"     "🛣  Маршруты (Routes)" \
-        "keys"       "🔑  Ключи (API / Pre-auth)" \
-        "namespaces" "📁  Namespaces" \
-        "exit"       "🚪  Выход"
-    ); do
-        case "$choice" in
-            users)      users_menu ;;
-            tags)       tags_menu ;;
-            nodes)      nodes_menu ;;
-            routes)     routes_menu ;;
-            keys)       keys_menu ;;
-            namespaces) namespaces_menu ;;
-            exit)       return 0 ;;
-            *)          ;; # ESC — продолжать
-        esac
-    done
-}
-
-# ============================================================
-# Пользователи
-# ============================================================
-
-users_menu() {
-    local choice
-    while choice=$(menu_box \
-        "👤 Пользователи" \
-        "Управление пользователями:" \
-        "users list"    "📋 Список пользователей" \
-        "users add"     "➕  Добавить пользователя" \
-        "users rename"  "✏  Переименовать" \
-        "users delete"  "🗑  Удалить пользователя" \
-        "back"          "⬅  Назад"
-    ); do
-        case "$choice" in
-            "users list")   users_list ;;
-            "users add")    users_add ;;
-            "users rename") users_rename ;;
-            "users delete") users_delete ;;
-            "back")         return 0 ;;
-            *)              ;;
-        esac
-    done
-}
-
-users_list() {
-    show_loading "Загрузка списка пользователей..."
-    local output
-    output=$(hs_exec_json user list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "Пользователи" "Нет пользователей" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Имя | Создан\n" +
-        "---\t|---\t|---",
-        .[] | "\(.id)\t| \(.name)\t| \(.created_at // "N/A")"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "Список пользователей" "$formatted" 20 80
-}
-
-users_add() {
-    local name
-    name=$(input_box "Добавить пользователя" "Введите имя нового пользователя:")
-    [[ -z "$name" ]] && return
-    
-    show_loading "Создание пользователя '${name}'..."
-    local result
-    result=$(hs_exec user create "$name" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Пользователь '${name}' создан\n\n${result}" 10 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Не удалось создать пользователя\n\n${result}" 12 60
-    }
-}
-
-users_rename() {
-    local old_name
-    old_name=$(select_user) || return
-    [[ -z "$old_name" ]] && return
-    
-    local new_name
-    new_name=$(input_box "Переименовать пользователя" "Новое имя для '${old_name}':" "$old_name")
-    [[ -z "$new_name" ]] && return
-    
-    show_loading "Переименование..."
-    local result
-    result=$(hs_exec user rename "$old_name" "$new_name" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Пользователь переименован: '${old_name}' → '${new_name}'" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-users_delete() {
-    local name
-    name=$(select_user) || return
-    [[ -z "$name" ]] && return
-    
-    if confirm_action "Удалить пользователя '${name}'?\n\n⚠ Все связанные узлы будут удалены!"; then
-        show_loading "Удаление пользователя '${name}'..."
-        local result
-        result=$(hs_exec user delete "$name" --force 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Пользователь '${name}' удалён" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Теги
-# ============================================================
-
-tags_menu() {
-    local choice
-    while choice=$(menu_box \
-        "🏷 Теги (ACL Tags)" \
-        "Управление тегами:" \
-        "tags list"     "📋 Показать теги всех узлов" \
-        "tags set"      "➕  Установить теги для узла" \
-        "tags delete"   "🗑  Удалить теги у узла" \
-        "back"          "⬅  Назад"
-    ); do
-        case "$choice" in
-            "tags list")   tags_list ;;
-            "tags set")    tags_set ;;
-            "tags delete") tags_delete ;;
-            "back")        return 0 ;;
-            *)             ;;
-        esac
-    done
-}
-
-tags_list() {
-    show_loading "Загрузка узлов с тегами..."
-    local output
-    output=$(hs_exec_json node list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "Теги" "Нет узлов" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Узел\t\t\t| Теги\n" +
-        "---\t|---\t\t\t|---",
-        .[] | "\(.id)\t| \(.name)\t| \(.tags // [] | join(", ") // "—")"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "Теги узлов" "$formatted" 20 80
-}
-
-tags_set() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    local tags
-    tags=$(input_box "Установить теги" "Введите теги через запятую:\n(например: tag:web,tag:prod)" "tag:")
-    [[ -z "$tags" ]] && return
-    
-    show_loading "Установка тегов..."
-    local result
-    result=$(hs_cli node tags set "$node_id" "$tags" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Теги установлены:\n${tags}" 10 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-tags_delete() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    if confirm_action "Удалить все теги у узла #${node_id}?"; then
-        show_loading "Удаление тегов..."
-        local result
-        result=$(hs_cli node tags delete "$node_id" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Теги удалены" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Узлы
-# ============================================================
-
+# ─── Nodes ───────────────────────────────────────────────────
 nodes_menu() {
-    local choice
-    while choice=$(menu_box \
-        "🖥 Узлы (Nodes)" \
-        "Управление узлами:" \
-        "nodes list"    "📋 Список узлов" \
-        "nodes get"     "🔍 Информация об узле" \
-        "nodes rename"  "✏  Переименовать узел" \
-        "nodes move"    "↔  Переместить в namespace" \
-        "nodes expire"  "⏰ Истечь срок ключа" \
-        "nodes delete"  "🗑  Удалить узел" \
-        "back"          "⬅  Назад"
-    ); do
-        case "$choice" in
-            "nodes list")   nodes_list ;;
-            "nodes get")    nodes_get ;;
-            "nodes rename") nodes_rename ;;
-            "nodes move")   nodes_move ;;
-            "nodes expire") nodes_expire ;;
-            "nodes delete") nodes_delete ;;
-            "back")         return 0 ;;
-            *)              ;;
-        esac
-    done
+  while true; do
+    clear; hdr; menu "🖥  Узлы (Nodes)" \
+      "Список узлов" \
+      "Информация об узле" \
+      "Переименовать узел" \
+      "Переместить в namespace" \
+      "Истечь срок ключа" \
+      "Удалить узел"
+
+    read -rp "  Выбор [0-6]: " c
+    case "$c" in
+      1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // "-")"' 2>/dev/null || err "Ошибка" ;;
+      2) local id; id=$(ask "ID или имя узла")
+         [[ -z "$id" ]] && continue
+         hsj node list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
+      3) local id nw; id=$(ask "ID или имя узла"); nw=$(ask "Новое имя")
+         [[ -z "$id" || -z "$nw" ]] && continue
+         hs node rename "$id" "$nw" && ok "Переименован" || err "Ошибка" ;;
+      4) local id ns; id=$(ask "ID или имя узла"); ns=$(ask "Namespace")
+         [[ -z "$id" || -z "$ns" ]] && continue
+         hs node move "$id" "$ns" && ok "Перемещён" || err "Ошибка" ;;
+      5) local id; id=$(ask "ID или имя узла")
+         [[ -z "$id" ]] && continue
+         hs node expire "$id" && ok "Ключ истёк" || err "Ошибка" ;;
+      6) local id; id=$(ask "ID или имя узла")
+         [[ -z "$id" ]] && continue
+         read -rp "  Удалить узел $id? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs node delete "$id" && ok "Удалён" || err "Ошибка"; } ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-nodes_list() {
-    show_loading "Загрузка списка узлов..."
-    local output
-    output=$(hs_exec_json node list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "Узлы" "Нет зарегистрированных узлов" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Узел\t\t\t| IP\t\t\t| Пользователь\t| Онлайн\n" +
-        "---\t|---\t\t\t|---\t\t\t|---\t\t|---",
-        .[] | "\(.id)\t| \(.name)\t| \(.ip_addresses // [] | join(", "))\t| \(.user.name // "N/A")\t| \(.online // false)"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "Список узлов" "$formatted" 20 100
+# ─── Users ───────────────────────────────────────────────────
+users_menu() {
+  while true; do
+    clear; hdr; menu "👤  Пользователи" \
+      "Список пользователей" \
+      "Добавить" \
+      "Переименовать" \
+      "Удалить"
+
+    read -rp "  Выбор [0-4]: " c
+    case "$c" in
+      1) hsj user list | jq -r '.[] | "\(.id)  \(.name)"' 2>/dev/null || err "Ошибка" ;;
+      2) local n; n=$(ask "Имя")
+         [[ -z "$n" ]] && continue
+         hs user create "$n" && ok "Создан" || err "Ошибка" ;;
+      3) local old new; old=$(ask "Текущее имя"); new=$(ask "Новое имя")
+         [[ -z "$old" || -z "$new" ]] && continue
+         hs user rename "$old" "$new" && ok "Переименован" || err "Ошибка" ;;
+      4) local n; n=$(ask "Имя")
+         [[ -z "$n" ]] && continue
+         read -rp "  Удалить $n? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs user delete "$n" --force && ok "Удалён" || err "Ошибка"; } ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-nodes_get() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    show_loading "Загрузка информации..."
-    local output
-    output=$(hs_exec_json node list)
-    local detail
-    detail=$(echo "$output" | jq --arg id "$node_id" '
-        .[] | select((.id | tostring) == $id or .name == $id)
-    ' 2>/dev/null | jq '.' 2>/dev/null)
-    
-    if [[ -n "$detail" && "$detail" != "null" ]]; then
-        whiptail --msgbox --title "Информация об узле #${node_id}" "$detail" 30 80
-    else
-        whiptail --msgbox --title "Ошибка" "Узел не найден" 8 60
-    fi
-}
-
-nodes_rename() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    local new_name
-    new_name=$(input_box "Переименовать узел" "Новое имя для узла #${node_id}:")
-    [[ -z "$new_name" ]] && return
-    
-    show_loading "Переименование..."
-    local result
-    result=$(hs_cli node rename "$node_id" "$new_name" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Узел переименован" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-nodes_move() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    local target_ns
-    target_ns=$(input_box "Переместить узел" "Целевой namespace для узла #${node_id}:" "default")
-    [[ -z "$target_ns" ]] && return
-    
-    show_loading "Перемещение узла..."
-    local result
-    result=$(hs_exec node move "$node_id" "$target_ns" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Узел перемещён в '${target_ns}'" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-nodes_expire() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    if confirm_action "Истечь срок действия ключа узла #${node_id}?"; then
-        show_loading "Истечение ключа..."
-        local result
-        result=$(hs_cli node expire "$node_id" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Срок действия ключа истёк" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-nodes_delete() {
-    local node_id
-    node_id=$(select_node) || return
-    [[ -z "$node_id" ]] && return
-    
-    if confirm_action "Удалить узел #${node_id}?"; then
-        show_loading "Удаление узла..."
-        local result
-        result=$(hs_exec node delete "$node_id" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Узел удалён" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Маршруты
-# ============================================================
-
+# ─── Routes ──────────────────────────────────────────────────
 routes_menu() {
-    local choice
-    while choice=$(menu_box \
-        "🛣 Маршруты (Routes)" \
-        "Управление маршрутами:" \
-        "routes list"     "📋 Список маршрутов" \
-        "routes enable"   "✅ Включить маршрут" \
-        "routes disable"  "❌ Отключить маршрут" \
-        "routes delete"   "🗑  Удалить маршрут" \
-        "back"            "⬅  Назад"
-    ); do
-        case "$choice" in
-            "routes list")   routes_list ;;
-            "routes enable") routes_enable ;;
-            "routes disable") routes_disable ;;
-            "routes delete") routes_delete ;;
-            "back")          return 0 ;;
-            *)               ;;
-        esac
-    done
+  while true; do
+    clear; hdr; menu "🛣  Маршруты" \
+      "Список" \
+      "Включить" \
+      "Отключить" \
+      "Удалить"
+
+    read -rp "  Выбор [0-4]: " c
+    case "$c" in
+      1) hsj routes list | jq -r '.[] | "\(.id)  \(.prefix)  \(.node.name // .node_id)  \(if .enabled then "ВКЛ" else "ВЫКЛ" end)"' 2>/dev/null || err "Ошибка" ;;
+      2) local id; id=$(ask "ID маршрута")
+         [[ -z "$id" ]] && continue
+         hs routes enable "$id" && ok "Включён" || err "Ошибка" ;;
+      3) local id; id=$(ask "ID маршрута")
+         [[ -z "$id" ]] && continue
+         hs routes disable "$id" && ok "Отключён" || err "Ошибка" ;;
+      4) local id; id=$(ask "ID маршрута")
+         [[ -z "$id" ]] && continue
+         read -rp "  Удалить маршрут $id? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs routes delete "$id" && ok "Удалён" || err "Ошибка"; } ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-routes_list() {
-    show_loading "Загрузка маршрутов..."
-    local output
-    output=$(hs_exec_json routes list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "Маршруты" "Нет маршрутов" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Префикс\t\t\t| Узел\t\t\t| Вкл?\n" +
-        "---\t|---\t\t\t|---\t\t\t|---",
-        .[] | "\(.id)\t| \(.prefix)\t| \(.node.name // .node_id)\t| \(if .enabled then "✅ Да" else "❌ Нет" end)"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "Список маршрутов" "$formatted" 20 100
+# ─── Tags ────────────────────────────────────────────────────
+tags_menu() {
+  while true; do
+    clear; hdr; menu "🏷  Теги" \
+      "Теги всех узлов" \
+      "Установить теги узлу" \
+      "Удалить теги у узла"
+
+    read -rp "  Выбор [0-3]: " c
+    case "$c" in
+      1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.tags // [] | join(", ") // "-")"' 2>/dev/null || err "Ошибка" ;;
+      2) local id tags; id=$(ask "ID или имя узла"); tags=$(ask "Теги через запятую (tag:web,tag:prod)")
+         [[ -z "$id" || -z "$tags" ]] && continue
+         hs node tags set "$id" "$tags" && ok "Теги установлены" || err "Ошибка" ;;
+      3) local id; id=$(ask "ID или имя узла")
+         [[ -z "$id" ]] && continue
+         hs node tags delete "$id" && ok "Теги удалены" || err "Ошибка" ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-routes_enable() {
-    local route_id
-    route_id=$(select_route) || return
-    [[ -z "$route_id" ]] && return
-    
-    show_loading "Включение маршрута..."
-    local result
-    result=$(hs_exec routes enable "$route_id" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Маршрут #${route_id} включён" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-routes_disable() {
-    local route_id
-    route_id=$(select_route) || return
-    [[ -z "$route_id" ]] && return
-    
-    show_loading "Отключение маршрута..."
-    local result
-    result=$(hs_exec routes disable "$route_id" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Маршрут #${route_id} отключён" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-routes_delete() {
-    local route_id
-    route_id=$(select_route) || return
-    [[ -z "$route_id" ]] && return
-    
-    if confirm_action "Удалить маршрут #${route_id}?"; then
-        show_loading "Удаление маршрута..."
-        local result
-        result=$(hs_exec routes delete "$route_id" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Маршрут удалён" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Ключи
-# ============================================================
-
+# ─── Keys ────────────────────────────────────────────────────
 keys_menu() {
-    local choice
-    while choice=$(menu_box \
-        "🔑 Ключи" \
-        "Управление ключами:" \
-        "keys api-list"       "📋 API ключи — список" \
-        "keys api-create"     "➕  Создать API ключ" \
-        "keys api-delete"     "🗑  Отозвать API ключ" \
-        "keys preauth-list"   "📋 Pre-auth ключи — список" \
-        "keys preauth-create" "➕  Создать pre-auth ключ" \
-        "keys preauth-delete" "🗑  Удалить pre-auth ключ" \
-        "back"                "⬅  Назад"
-    ); do
-        case "$choice" in
-            "keys api-list")       keys_api_list ;;
-            "keys api-create")     keys_api_create ;;
-            "keys api-delete")     keys_api_delete ;;
-            "keys preauth-list")   keys_preauth_list ;;
-            "keys preauth-create") keys_preauth_create ;;
-            "keys preauth-delete") keys_preauth_delete ;;
-            "back")                return 0 ;;
-            *)                     ;;
-        esac
-    done
+  while true; do
+    clear; hdr; menu "🔑  Ключи" \
+      "API-ключи: список" \
+      "Создать API-ключ" \
+      "Отозвать API-ключ" \
+      "Preauth-ключи: список" \
+      "Создать preauth-ключ" \
+      "Удалить preauth-ключ"
+
+    read -rp "  Выбор [0-6]: " c
+    case "$c" in
+      1) hsj apikeys list | jq -r '.[] | "\(.id)  \(.prefix)  \(.expiration // "-")"' 2>/dev/null || err "Нет ключей" ;;
+      2) local exp; exp=$(ask "Срок (90d/365d/Enter=def)" "90d")
+         [[ -z "$exp" ]] && exp="90d"
+         hs apikeys create --expiration "$exp" && ok "Ключ создан" || err "Ошибка" ;;
+      3) local id; id=$(ask "ID или префикс ключа")
+         [[ -z "$id" ]] && continue
+         read -rp "  Отозвать $id? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs apikeys delete "$id" && ok "Отозван" || err "Ошибка"; } ;;
+      4) local ns; ns=$(ask "Namespace (Enter=all)" "")
+         if [[ -z "$ns" ]]; then
+           hsj namespaces list | jq -r '.[].name' 2>/dev/null | while read -r n; do
+             echo -e "\n  === $n ==="
+             hsj preauthkeys list -n "$n" 2>/dev/null | jq -r '.[] | "\(.id)  reuse=\(.reusable)  \(.expiration // "-")"' 2>/dev/null || true
+           done
+         else
+           hsj preauthkeys list -n "$ns" | jq -r '.[] | "\(.id)  reuse=\(.reusable)  \(.expiration // "-")"' 2>/dev/null || err "Нет ключей"
+         fi ;;
+      5) local ns reuse ephem exp
+         ns=$(ask "Namespace")
+         reuse=$(ask "Reusable (true/false)" "false")
+         ephem=$(ask "Ephemeral (true/false)" "false")
+         exp=$(ask "Срок (30d/90d)" "90d")
+         [[ -z "$ns" ]] && continue
+         hs preauthkeys create -n "$ns" --reusable "$reuse" --ephemeral "$ephem" --expiration "$exp" && ok "Ключ создан" || err "Ошибка" ;;
+      6) local ns id; ns=$(ask "Namespace"); id=$(ask "ID ключа")
+         [[ -z "$ns" || -z "$id" ]] && continue
+         hs preauthkeys delete -n "$ns" "$id" && ok "Удалён" || err "Ошибка" ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-keys_api_list() {
-    show_loading "Загрузка API ключей..."
-    local output
-    output=$(hs_exec_json apikeys list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "API ключи" "Нет API ключей" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Префикс\t| Создан\t\t| Истекает\n" +
-        "---\t|---\t|---\t\t|---",
-        .[] | "\(.id)\t| \(.prefix // "N/A")\t| \(.created_at // "N/A")\t| \(.expiration // "N/A")"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "API ключи" "$formatted" 15 80
+# ─── Namespaces ──────────────────────────────────────────────
+ns_menu() {
+  while true; do
+    clear; hdr; menu "📁  Namespaces" \
+      "Список" \
+      "Создать" \
+      "Переименовать" \
+      "Удалить"
+
+    read -rp "  Выбор [0-4]: " c
+    case "$c" in
+      1) hsj namespaces list | jq -r '.[] | "\(.id)  \(.name)"' 2>/dev/null || err "Ошибка" ;;
+      2) local n; n=$(ask "Имя namespace")
+         [[ -z "$n" ]] && continue
+         hs namespaces create "$n" && ok "Создан" || err "Ошибка" ;;
+      3) local old new; old=$(ask "Текущее имя"); new=$(ask "Новое имя")
+         [[ -z "$old" || -z "$new" ]] && continue
+         hs namespaces rename "$old" "$new" && ok "Переименован" || err "Ошибка" ;;
+      4) local n; n=$(ask "Имя")
+         [[ -z "$n" ]] && continue
+         read -rp "  Удалить $n? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs namespaces delete "$n" && ok "Удалён" || err "Ошибка"; } ;;
+      0) return ;;
+    esac
+    wait_key
+  done
 }
 
-keys_api_create() {
-    local expiration
-    expiration=$(input_box "Создать API ключ" "Срок действия:" "90d")
-    [[ -z "$expiration" ]] && return
-    
-    show_loading "Создание API ключа..."
-    local result
-    result=$(hs_exec apikeys create --expiration "$expiration" 2>&1) && {
-        whiptail --msgbox --title "✅ API ключ создан" "🔑 Ключ:\n\n${result}\n\n⚠ Сохраните его — он не будет показан снова!" 15 70
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-keys_api_delete() {
-    local key
-    key=$(input_box "Отозвать API ключ" "Введите ID или префикс ключа:")
-    [[ -z "$key" ]] && return
-    
-    if confirm_action "Отозвать API ключ '${key}'?"; then
-        show_loading "Отзыв ключа..."
-        local result
-        result=$(hs_exec apikeys delete "$key" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ API ключ отозван" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-keys_preauth_list() {
-    local ns_choice
-    ns_choice=$(menu_box "Pre-auth ключи" "Выберите namespace:" \
-        "all"    "Все namespaces" \
-        "select" "Выбрать конкретный" \
-        "back"   "Назад" 2>/dev/null) || return
-    [[ "$ns_choice" == "back" || -z "$ns_choice" ]] && return
-    
-    show_loading "Загрузка pre-auth ключей..."
-    
-    if [[ "$ns_choice" == "all" ]]; then
-        local ns_list
-        ns_list=$(hs_exec_json namespaces list | jq -r '.[].name' 2>/dev/null) || true
-        
-        if [[ -z "$ns_list" ]]; then
-            whiptail --msgbox --title "Pre-auth ключи" "Нет namespaces" 8 60
-            return
-        fi
-        
-        local all_output=""
-        while IFS= read -r ns; do
-            local ns_keys
-            ns_keys=$(hs_exec_json preauthkeys list -n "$ns" 2>/dev/null) || true
-            if [[ -n "$ns_keys" && "$ns_keys" != *"null"* && "$ns_keys" != *"[]"* ]]; then
-                all_output+="\n=== Namespace: ${ns} ===\n"
-                all_output+=$(echo "$ns_keys" | jq -r '
-                    "ID\t| Reuse | Ephem | Истекает\t\t| Used\n" +
-                    "---\t|---\t|---\t|---\t\t|---",
-                    .[] | "\(.id)\t| \(.reusable)\t| \(.ephemeral)\t| \(.expiration // "N/A")\t| \(.used // false)"
-                ' 2>/dev/null)
-                all_output+="\n"
-            fi
-        done <<< "$ns_list"
-        
-        if [[ -z "$all_output" ]]; then
-            whiptail --msgbox --title "Pre-auth ключи" "Нет pre-auth ключей" 8 60
-        else
-            whiptail --msgbox --title "Pre-auth ключи (все)" "$all_output" 25 80
-        fi
-    else
-        local ns
-        ns=$(select_namespace) || return
-        [[ -z "$ns" ]] && return
-        
-        local output
-        output=$(hs_exec_json preauthkeys list -n "$ns" 2>/dev/null)
-        
-        if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-            whiptail --msgbox --title "Pre-auth ключи" "Нет ключей в namespace '${ns}'" 8 60
-            return
-        fi
-        
-        local formatted
-        formatted=$(echo "$output" | jq -r '
-            "ID\t| Reuse | Ephem | Истекает\t\t| Used\n" +
-            "---\t|---\t|---\t|---\t\t|---",
-            .[] | "\(.id)\t| \(.reusable)\t| \(.ephemeral)\t| \(.expiration // "N/A")\t| \(.used // false)"
-        ' 2>/dev/null)
-        
-        whiptail --msgbox --title "Pre-auth ключи (${ns})" "$formatted" 20 80
-    fi
-}
-
-keys_preauth_create() {
-    local ns
-    ns=$(select_namespace) || return
-    [[ -z "$ns" ]] && return
-    
-    local reusable
-    reusable=$(menu_box "Тип ключа" "Ключ многоразовый?" \
-        "true"  "Да, многоразовый" \
-        "false" "Нет, одноразовый" 2>/dev/null) || return
-    [[ -z "$reusable" ]] && return
-    
-    local ephemeral
-    ephemeral=$(menu_box "Тип ключа" "Ключ эфемерный?" \
-        "true"  "Да, эфемерный" \
-        "false" "Нет" 2>/dev/null) || return
-    [[ -z "$ephemeral" ]] && return
-    
-    local expiration
-    expiration=$(input_box "Срок действия" "Введите срок действия:" "30m")
-    [[ -z "$expiration" ]] && return
-    
-    show_loading "Создание pre-auth ключа..."
-    local result
-    result=$(hs_exec preauthkeys create \
-        --namespace "$ns" \
-        --reusable "$reusable" \
-        --ephemeral "$ephemeral" \
-        --expiration "$expiration" 2>&1) && {
-        whiptail --msgbox --title "✅ Pre-auth ключ создан" "🔑 Ключ:\n\n${result}\n\n⚠ Сохраните его — он не будет показан снова!" 15 70
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-keys_preauth_delete() {
-    local ns
-    ns=$(select_namespace) || return
-    [[ -z "$ns" ]] && return
-    
-    show_loading "Загрузка ключей..."
-    local keys_json
-    keys_json=$(hs_exec_json preauthkeys list -n "$ns" 2>/dev/null) || true
-    
-    if [[ -z "$keys_json" || "$keys_json" == *"null"* || "$keys_json" == *"[]"* ]]; then
-        whiptail --msgbox --title "Pre-auth ключи" "Нет ключей в namespace '${ns}'" 8 60
-        return
-    fi
-    
-    local key_id
-    key_id=$(echo "$keys_json" | jq -r '.[0].id' 2>/dev/null)
-    
-    local key
-    key=$(input_box "Удалить pre-auth ключ" "Введите ID ключа из namespace '${ns}':" "$key_id")
-    [[ -z "$key" ]] && return
-    
-    if confirm_action "Удалить pre-auth ключ '${key}' из '${ns}'?"; then
-        show_loading "Удаление ключа..."
-        local result
-        result=$(hs_exec preauthkeys delete --namespace "$ns" --key "$key" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Pre-auth ключ удалён" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Namespaces
-# ============================================================
-
-namespaces_menu() {
-    local choice
-    while choice=$(menu_box \
-        "📁 Namespaces" \
-        "Управление namespaces:" \
-        "ns list"     "📋 Список namespaces" \
-        "ns create"   "➕  Создать namespace" \
-        "ns rename"   "✏  Переименовать" \
-        "ns delete"   "🗑  Удалить namespace" \
-        "back"        "⬅  Назад"
-    ); do
-        case "$choice" in
-            "ns list")   namespaces_list ;;
-            "ns create") namespaces_create ;;
-            "ns rename") namespaces_rename ;;
-            "ns delete") namespaces_delete ;;
-            "back")      return 0 ;;
-            *)           ;;
-        esac
-    done
-}
-
-namespaces_list() {
-    show_loading "Загрузка namespaces..."
-    local output
-    output=$(hs_exec_json namespaces list)
-    
-    if [[ -z "$output" || "$output" == *"null"* || "$output" == *"[]"* ]]; then
-        whiptail --msgbox --title "Namespaces" "Нет namespaces" 8 60
-        return
-    fi
-    
-    local formatted
-    formatted=$(echo "$output" | jq -r '
-        "ID\t| Имя\n" +
-        "---\t|---",
-        .[] | "\(.id)\t| \(.name)"
-    ' 2>/dev/null || echo "$output")
-    
-    whiptail --msgbox --title "Список namespaces" "$formatted" 15 60
-}
-
-namespaces_create() {
-    local name
-    name=$(input_box "Создать namespace" "Введите имя нового namespace:")
-    [[ -z "$name" ]] && return
-    
-    show_loading "Создание namespace..."
-    local result
-    result=$(hs_exec namespaces create "$name" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Namespace '${name}' создан" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-namespaces_rename() {
-    local old_name
-    old_name=$(select_namespace) || return
-    [[ -z "$old_name" ]] && return
-    
-    local new_name
-    new_name=$(input_box "Переименовать namespace" "Новое имя для '${old_name}':" "$old_name")
-    [[ -z "$new_name" ]] && return
-    
-    show_loading "Переименование..."
-    local result
-    result=$(hs_exec namespaces rename "$old_name" "$new_name" 2>&1) && {
-        whiptail --msgbox --title "Успех" "✅ Namespace переименован: '${old_name}' → '${new_name}'" 8 60
-    } || {
-        whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-    }
-}
-
-namespaces_delete() {
-    local name
-    name=$(select_namespace) || return
-    [[ -z "$name" ]] && return
-    
-    if confirm_action "Удалить namespace '${name}'?\n\n⚠ Все узлы будут перемещены в default."; then
-        show_loading "Удаление namespace..."
-        local result
-        result=$(hs_exec namespaces delete "$name" 2>&1) && {
-            whiptail --msgbox --title "Успех" "✅ Namespace '${name}' удалён" 8 60
-        } || {
-            whiptail --msgbox --title "Ошибка" "❌ Ошибка:\n\n${result}" 12 60
-        }
-    fi
-}
-
-# ============================================================
-# Запуск
-# ============================================================
-
+# ─── Главное меню ────────────────────────────────────────────
 main() {
-    check_deps
-    check_headscale
-    main_menu
+  if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+    echo -e "${RED}Контейнер '${CONTAINER}' не запущен${NC}"
+    exit 1
+  fi
+
+  while true; do
+    clear; hdr
+    echo ""
+    echo -e "  ${GREEN}1${NC}) Узлы"
+    echo -e "  ${GREEN}2${NC}) Пользователи"
+    echo -e "  ${GREEN}3${NC}) Маршруты"
+    echo -e "  ${GREEN}4${NC}) Теги"
+    echo -e "  ${GREEN}5${NC}) Ключи"
+    echo -e "  ${GREEN}6${NC}) Namespaces"
+    echo -e "  ${GREEN}0${NC}) Выход"
+    echo ""
+    read -rp "  Выбор [0-6]: " c
+    case "$c" in
+      1) nodes_menu ;;
+      2) users_menu ;;
+      3) routes_menu ;;
+      4) tags_menu ;;
+      5) keys_menu ;;
+      6) ns_menu ;;
+      0) echo -e "  ${GREEN}Пока!${NC}"; exit 0 ;;
+    esac
+  done
 }
 
-main "$@"
+main
