@@ -59,28 +59,32 @@ nodes_menu() {
   while true; do
     clear; hdr; menu "🖥  Узлы (Nodes)" \
       "Список узлов" \
+      "Зарегистрировать узел" \
       "Информация об узле" \
       "Переименовать узел" \
       "Переместить в namespace" \
       "Истечь срок ключа" \
       "Удалить узел"
 
-    read -rp "  Выбор [0-6]: " c
+    read -rp "  Выбор [0-7]: " c
     case "$c" in
       1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // "-")"' 2>/dev/null || err "Ошибка" ;;
-      2) local id; id=$(ask "ID или имя узла")
+      2) local key; key=$(ask "Ключ регистрации (с клиента)")
+         [[ -z "$key" ]] && continue
+         hs node register "$key" && ok "Узел зарегистрирован" || err "Ошибка" ;;
+      3) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
          hsj node list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
-      3) local id nw; id=$(ask "ID или имя узла"); nw=$(ask "Новое имя")
+      4) local id nw; id=$(ask "ID или имя узла"); nw=$(ask "Новое имя")
          [[ -z "$id" || -z "$nw" ]] && continue
          hs node rename "$id" "$nw" && ok "Переименован" || err "Ошибка" ;;
-      4) local id ns; id=$(ask "ID или имя узла"); ns=$(ask "Namespace")
+      5) local id ns; id=$(ask "ID или имя узла"); ns=$(ask "Namespace")
          [[ -z "$id" || -z "$ns" ]] && continue
          hs node move "$id" "$ns" && ok "Перемещён" || err "Ошибка" ;;
-      5) local id; id=$(ask "ID или имя узла")
+      6) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
          hs node expire "$id" && ok "Ключ истёк" || err "Ошибка" ;;
-      6) local id; id=$(ask "ID или имя узла")
+      7) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
          read -rp "  Удалить узел $id? [y/N]: " yn
          [[ "$yn" =~ ^[yY] ]] && { hs node delete "$id" && ok "Удалён" || err "Ошибка"; } ;;
