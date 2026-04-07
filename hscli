@@ -69,9 +69,12 @@ nodes_menu() {
     read -rp "  Выбор [0-7]: " c
     case "$c" in
       1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // "-")"' 2>/dev/null || err "Ошибка" ;;
-      2) local key; key=$(ask "Ключ регистрации (с клиента)")
+      2) local key ns
+         key=$(ask "Ключ регистрации (с клиента)")
          [[ -z "$key" ]] && continue
-         hs node register "$key" && ok "Узел зарегистрирован" || err "Ошибка" ;;
+         ns=$(ask "Namespace (пользователь)")
+         [[ -z "$ns" ]] && continue
+         hs node register --key "$key" --user "$ns" && ok "Узел зарегистрирован" || err "Ошибка" ;;
       3) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
          hsj node list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
