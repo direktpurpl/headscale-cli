@@ -1,34 +1,28 @@
 name: hscli
-help: "CLI-утилита для управления Headscale v0.28.0"
-version: "0.1.0"
-
-args:
-- name: command
-  required: true
-  help: "Подкоманда (users, tags, nodes, routes, keys)"
+help: "CLI-утилита для управления Headscale v0.23.0+"
+version: "0.2.0"
 
 env:
 - name: HEADSCALE_CONTAINER
   help: "Имя Docker-контейнера Headscale"
   default: "headscale"
-- name: HEADSCALE_NAMESPACE
-  help: "Namespace для фильтрации (опционально)"
 
 commands:
 - name: users
   alias: u
-  help: "Управление пользователями (users)"
+  help: "Управление пользователями"
   commands:
   - name: list
     alias: ls
     help: "Показать список пользователей"
-  - name: add
+  - name: create
+    alias: add
     help: "Добавить нового пользователя"
     args:
     - name: name
       required: true
       help: "Имя пользователя"
-  - name: delete
+  - name: destroy
     alias: rm
     help: "Удалить пользователя"
     args:
@@ -45,78 +39,64 @@ commands:
       required: true
       help: "Новое имя"
 
-- name: tags
-  alias: t
-  help: "Управление ACL тегами"
-  commands:
-  - name: list
-    alias: ls
-    help: "Показать список тегов узла"
-    args:
-    - name: node
-      required: false
-      help: "ID или имя узла (опционально)"
-  - name: set
-    help: "Установить теги для узла"
-    args:
-    - name: node
-      required: true
-      help: "ID или имя узла"
-    - name: tags
-      required: true
-      help: "Список тегов через запятую (tag:foo,tag:bar)"
-  - name: delete
-    alias: rm
-    help: "Удалить теги у узла"
-    args:
-    - name: node
-      required: true
-      help: "ID или имя узла"
-
 - name: nodes
   alias: n
-  help: "Управление узлами (machines)"
+  help: "Управление узлами"
   commands:
   - name: list
     alias: ls
     help: "Показать список узлов"
-  - name: get
-    help: "Получить информацию об узле"
-    args:
-    - name: node
+  - name: register
+    help: "Зарегистрировать новый узел"
+    flags:
+    - long: --key
+      short: -k
+      arg: key
       required: true
-      help: "ID или имя узла"
+    - long: --user
+      short: -u
+      arg: user
+      required: true
   - name: delete
     alias: rm
     help: "Удалить узел"
-    args:
-    - name: node
+    flags:
+    - long: --identifier
+      short: -i
+      arg: id
       required: true
-      help: "ID или имя узла"
-  - name: move
-    help: "Переместить узел в другой namespace"
-    args:
-    - name: node
-      required: true
-      help: "ID или имя узла"
-    - name: namespace
-      required: true
-      help: "Целевой namespace"
-  - name: expire
-    help: "Истечь срок действия ключа узла"
-    args:
-    - name: node
-      required: true
-      help: "ID или имя узла"
+      help: "ID узла"
   - name: rename
     help: "Переименовать узел"
     args:
-    - name: node
-      required: true
-      help: "Текущее имя/ID узла"
     - name: new_name
       required: true
       help: "Новое имя узла"
+    flags:
+    - long: --identifier
+      short: -i
+      arg: id
+      required: true
+      help: "ID узла"
+  - name: expire
+    help: "Истечь срок действия ключа узла"
+    flags:
+    - long: --identifier
+      short: -i
+      arg: id
+      required: true
+  - name: tag
+    help: "Установить теги для узла"
+    flags:
+    - long: --identifier
+      short: -i
+      arg: id
+      required: true
+    - long: --tags
+      short: -t
+      arg: tags
+      required: true
+      help: "Список тегов через запятую"
 
 - name: routes
   alias: r
@@ -125,111 +105,72 @@ commands:
   - name: list
     alias: ls
     help: "Показать все маршруты"
-  - name: get
-    help: "Получить информацию о маршруте"
-    args:
-    - name: route
-      required: true
-      help: "ID маршрута"
   - name: enable
     help: "Включить маршрут"
-    args:
-    - name: route
+    flags:
+    - long: --route-id
+      short: -r
+      arg: id
       required: true
-      help: "ID маршрута"
   - name: disable
     help: "Отключить маршрут"
-    args:
-    - name: route
+    flags:
+    - long: --route-id
+      short: -r
+      arg: id
       required: true
-      help: "ID маршрута"
   - name: delete
     alias: rm
     help: "Удалить маршрут"
-    args:
-    - name: route
+    flags:
+    - long: --route-id
+      short: -r
+      arg: id
       required: true
-      help: "ID маршрута"
 
 - name: keys
   alias: k
-  help: "Управление ключами (API keys, pre-auth keys)"
+  help: "Управление ключами"
   commands:
   - name: api-list
     alias: api-ls
     help: "Показать API ключи"
   - name: api-create
     help: "Создать API ключ"
-    args:
-    - name: expiration
-      required: false
-      help: "Срок действия (например 90d, 180d, 365d)"
+    flags:
+    - long: --expiration
+      short: -e
+      arg: exp
   - name: api-delete
     help: "Отозвать API ключ"
-    args:
-    - name: key
+    flags:
+    - long: --prefix
+      short: -p
+      arg: prefix
       required: true
-      help: "Префикс или ID API ключа"
   - name: preauth-list
     alias: preauth-ls
     help: "Показать pre-auth ключи"
-    args:
-    - name: namespace
-      required: false
-      help: "Фильтр по namespace"
   - name: preauth-create
     help: "Создать pre-auth ключ"
-    args:
-    - name: namespace
+    flags:
+    - long: --user
+      short: -u
+      arg: user
       required: true
-      help: "Namespace для ключа"
-    - name: reusable
-      required: false
-      help: "Многоразовый ключ (true/false)"
-      default: "false"
-    - name: ephemeral
-      required: false
-      help: "Эфемерный ключ (true/false)"
-      default: "false"
-    - name: expiration
-      required: false
-      help: "Срок действия (например 30m, 24h, 90d)"
+    - long: --reusable
+      short: -r
+      type: bool
+    - long: --ephemeral
+      short: -e
+      type: bool
+    - long: --expiration
+      short: -x
+      arg: exp
   - name: preauth-delete
     help: "Удалить pre-auth ключ"
-    args:
-    - name: namespace
+    flags:
+    - long: --id
+      short: -i
+      arg: id
       required: true
-      help: "Namespace ключа"
-    - name: key
-      required: true
-      help: "ID или префикс pre-auth ключа"
-
-- name: namespaces
-  alias: ns
-  help: "Управление namespaces"
-  commands:
-  - name: list
-    alias: ls
-    help: "Показать namespaces"
-  - name: create
-    help: "Создать namespace"
-    args:
-    - name: name
-      required: true
-      help: "Имя namespace"
-  - name: delete
-    alias: rm
-    help: "Удалить namespace"
-    args:
-    - name: name
-      required: true
-      help: "Имя namespace"
-  - name: rename
-    help: "Переименовать namespace"
-    args:
-    - name: old_name
-      required: true
-      help: "Текущее имя"
-    - name: new_name
-      required: true
-      help: "Новое имя"

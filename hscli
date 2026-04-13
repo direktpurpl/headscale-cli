@@ -44,9 +44,15 @@ menu() {
 
 ask() {
   local prompt="$1"
+  local default="${2:-}"
   local val
-  read -rp "  ${prompt}: " val
-  echo "$val"
+  if [[ -n "$default" ]]; then
+    read -rp "  ${prompt} [${default}]: " val
+    echo "${val:-$default}"
+  else
+    read -rp "  ${prompt}: " val
+    echo "$val"
+  fi
 }
 
 wait_key() { echo ""; read -rsp "  Нажмите Enter..." r; echo ""; }
@@ -62,35 +68,36 @@ nodes_menu() {
       "Зарегистрировать узел" \
       "Информация об узле" \
       "Переименовать узел" \
-      "Переместить в namespace" \
+      "Переместить в пользователя" \
       "Истечь срок ключа" \
       "Удалить узел"
 
     read -rp "  Выбор [0-7]: " c
     case "$c" in
-      1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // "-")"' 2>/dev/null || err "Ошибка" ;;
+      1) hsj nodes list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // .user // "-")"' 2>/dev/null || err "Ошибка" ;;
       2) local key ns
          key=$(ask "Ключ регистрации (с клиента)")
          [[ -z "$key" ]] && continue
-         ns=$(ask "Namespace (пользователь)")
+         ns=$(ask "Пользователь (User)")
          [[ -z "$ns" ]] && continue
-         hs node register --key "$key" --user "$ns" && ok "Узел зарегистрирован" || err "Ошибка" ;;
+         hs nodes register --key "$key" --user "$ns" && ok "Узел зарегистрирован" || err "Ошибка" ;;
       3) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
-         hsj node list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
-      4) local id nw; id=$(ask "ID или имя узла"); nw=$(ask "Новое имя")
+         hsj nodes list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
+      4) local id nw; id=$(ask "ID узла"); nw=$(ask "Новое имя")
          [[ -z "$id" || -z "$nw" ]] && continue
-         hs node rename "$id" "$nw" && ok "Переименован" || err "Ошибка" ;;
-      5) local id ns; id=$(ask "ID или имя узла"); ns=$(ask "Namespace")
+         hs nodes rename --identifier "$id" "$nw" && ok "Переименован" || err "Ошибка" ;;
+      5) local id ns; id=$(ask "ID узла"); ns=$(ask "Новый пользователь")
          [[ -z "$id" || -z "$ns" ]] && continue
-         hs node move "$id" "$ns" && ok "Перемещён" || err "Ошибка" ;;
-      6) local id; id=$(ask "ID или имя узла")
+         echo -e "${YELLOW}  Внимание: в новых версиях Headscale перемещение узлов может быть не поддерживается.${NC}"
+         hs nodes move --identifier "$id" --user "$ns" && ok "Перемещён" || err "Ошибка (возможно команда удалена)" ;;
+      6) local id; id=$(ask "ID узла")
          [[ -z "$id" ]] && continue
-         hs node expire "$id" && ok "Ключ истёк" || err "Ошибка" ;;
-      7) local id; id=$(ask "ID или имя узла")
+         hs nodes expire --identifier "$id" && ok "Ключ истёк" || err "Ошибка" ;;
+      7) local id; id=$(ask "ID узла")
          [[ -z "$id" ]] && continue
          read -rp "  Удалить узел $id? [y/N]: " yn
-         [[ "$yn" =~ ^[yY] ]] && { hs node delete "$id" && ok "Удалён" || err "Ошибка"; } ;;
+         [[ "$yn" =~ ^[yY] ]] && { hs nodes delete --identifier "$id" && ok "Удалён" || err "Ошибка"; } ;;
       0) return ;;
     esac
     wait_key
@@ -108,17 +115,17 @@ users_menu() {
 
     read -rp "  Выбор [0-4]: " c
     case "$c" in
-      1) hsj user list | jq -r '.[] | "\(.id)  \(.name)"' 2>/dev/null || err "Ошибка" ;;
+      1) hsj users list | jq -r '.[] | "\(.id)  \(.name)"' 2>/dev/null || err "Ошибка" ;;
       2) local n; n=$(ask "Имя")
          [[ -z "$n" ]] && continue
-         hs user create "$n" && ok "Создан" || err "Ошибка" ;;
+         hs users create "$n" && ok "Создан" || err "Ошибка" ;;
       3) local old new; old=$(ask "Текущее имя"); new=$(ask "Новое имя")
          [[ -z "$old" || -z "$new" ]] && continue
-         hs user rename "$old" "$new" && ok "Переименован" || err "Ошибка" ;;
+         hs users rename "$old" "$new" && ok "Переименован" || err "Ошибка" ;;
       4) local n; n=$(ask "Имя")
          [[ -z "$n" ]] && continue
          read -rp "  Удалить $n? [y/N]: " yn
-         [[ "$yn" =~ ^[yY] ]] && { hs user delete "$n" --force && ok "Удалён" || err "Ошибка"; } ;;
+         [[ "$yn" =~ ^[yY] ]] && { hs users destroy "$n" && ok "Удалён" || err "Ошибка"; } ;;
       0) return ;;
     esac
     wait_key
@@ -139,14 +146,14 @@ routes_menu() {
       1) hsj routes list | jq -r '.[] | "\(.id)  \(.prefix)  \(.node.name // .node_id)  \(if .enabled then "ВКЛ" else "ВЫКЛ" end)"' 2>/dev/null || err "Ошибка" ;;
       2) local id; id=$(ask "ID маршрута")
          [[ -z "$id" ]] && continue
-         hs routes enable "$id" && ok "Включён" || err "Ошибка" ;;
+         hs routes enable -r "$id" && ok "Включён" || err "Ошибка" ;;
       3) local id; id=$(ask "ID маршрута")
          [[ -z "$id" ]] && continue
-         hs routes disable "$id" && ok "Отключён" || err "Ошибка" ;;
+         hs routes disable -r "$id" && ok "Отключён" || err "Ошибка" ;;
       4) local id; id=$(ask "ID маршрута")
          [[ -z "$id" ]] && continue
          read -rp "  Удалить маршрут $id? [y/N]: " yn
-         [[ "$yn" =~ ^[yY] ]] && { hs routes delete "$id" && ok "Удалён" || err "Ошибка"; } ;;
+         [[ "$yn" =~ ^[yY] ]] && { hs routes delete -r "$id" && ok "Удалён" || err "Ошибка"; } ;;
       0) return ;;
     esac
     wait_key
@@ -159,17 +166,17 @@ tags_menu() {
     clear; hdr; menu "🏷  Теги" \
       "Теги всех узлов" \
       "Установить теги узлу" \
-      "Удалить теги у узла"
+      "Удалить все теги у узла"
 
     read -rp "  Выбор [0-3]: " c
     case "$c" in
-      1) hsj node list | jq -r '.[] | "\(.id)  \(.name)  \(.tags // [] | join(", ") // "-")"' 2>/dev/null || err "Ошибка" ;;
-      2) local id tags; id=$(ask "ID или имя узла"); tags=$(ask "Теги через запятую (tag:web,tag:prod)")
+      1) hsj nodes list | jq -r '.[] | "\(.id)  \(.name)  \(.tags // [] | join(", ") // "-")"' 2>/dev/null || err "Ошибка" ;;
+      2) local id tags; id=$(ask "ID узла"); tags=$(ask "Теги через запятую (tag:web,tag:prod)")
          [[ -z "$id" || -z "$tags" ]] && continue
-         hs node tags set "$id" "$tags" && ok "Теги установлены" || err "Ошибка" ;;
-      3) local id; id=$(ask "ID или имя узла")
+         hs nodes tag --identifier "$id" --tags "$tags" && ok "Теги установлены" || err "Ошибка" ;;
+      3) local id; id=$(ask "ID узла")
          [[ -z "$id" ]] && continue
-         hs node tags delete "$id" && ok "Теги удалены" || err "Ошибка" ;;
+         hs nodes tag --identifier "$id" --tags "" && ok "Теги удалены" || err "Ошибка" ;;
       0) return ;;
     esac
     wait_key
@@ -182,7 +189,7 @@ keys_menu() {
     clear; hdr; menu "🔑  Ключи" \
       "API-ключи: список" \
       "Создать API-ключ" \
-      "Отозвать API-ключ" \
+      "Удалить API-ключ" \
       "Preauth-ключи: список" \
       "Создать preauth-ключ" \
       "Удалить preauth-ключ"
@@ -191,63 +198,32 @@ keys_menu() {
     case "$c" in
       1) hsj apikeys list | jq -r '.[] | "\(.id)  \(.prefix)  \(.expiration // "-")"' 2>/dev/null || err "Нет ключей" ;;
       2) local exp; exp=$(ask "Срок (90d/365d/Enter=def)" "90d")
-         [[ -z "$exp" ]] && exp="90d"
          hs apikeys create --expiration "$exp" && ok "Ключ создан" || err "Ошибка" ;;
       3) local id; id=$(ask "ID или префикс ключа")
          [[ -z "$id" ]] && continue
-         read -rp "  Отозвать $id? [y/N]: " yn
-         [[ "$yn" =~ ^[yY] ]] && { hs apikeys delete "$id" && ok "Отозван" || err "Ошибка"; } ;;
-      4) local ns; ns=$(ask "Namespace (Enter=all)" "")
-         if [[ -z "$ns" ]]; then
-           hsj namespaces list | jq -r '.[].name' 2>/dev/null | while read -r n; do
-             echo -e "\n  === $n ==="
-             hsj preauthkeys list -n "$n" 2>/dev/null | jq -r '.[] | "\(.id)  reuse=\(.reusable)  \(.expiration // "-")"' 2>/dev/null || true
-           done
-         else
-           hsj preauthkeys list -n "$ns" | jq -r '.[] | "\(.id)  reuse=\(.reusable)  \(.expiration // "-")"' 2>/dev/null || err "Нет ключей"
-         fi ;;
+         read -rp "  Удалить $id? [y/N]: " yn
+         [[ "$yn" =~ ^[yY] ]] && { hs apikeys delete --prefix "$id" && ok "Удалён" || err "Ошибка"; } ;;
+      4) hsj preauthkeys list | jq -r '.[] | "\(.id)  user=\(.user)  reuse=\(.reusable)  \(.expiration // "-")"' 2>/dev/null || err "Нет ключей" ;;
       5) local ns reuse ephem exp
-         ns=$(ask "Namespace")
+         ns=$(ask "Пользователь")
          reuse=$(ask "Reusable (true/false)" "false")
          ephem=$(ask "Ephemeral (true/false)" "false")
          exp=$(ask "Срок (30d/90d)" "90d")
          [[ -z "$ns" ]] && continue
-         hs preauthkeys create -n "$ns" --reusable "$reuse" --ephemeral "$ephem" --expiration "$exp" && ok "Ключ создан" || err "Ошибка" ;;
-      6) local ns id; ns=$(ask "Namespace"); id=$(ask "ID ключа")
-         [[ -z "$ns" || -z "$id" ]] && continue
-         hs preauthkeys delete -n "$ns" "$id" && ok "Удалён" || err "Ошибка" ;;
+         hs preauthkeys create --user "$ns" --reusable="$reuse" --ephemeral="$ephem" --expiration "$exp" && ok "Ключ создан" || err "Ошибка" ;;
+      6) local id; id=$(ask "ID ключа")
+         [[ -z "$id" ]] && continue
+         hs preauthkeys delete --id "$id" && ok "Удалён" || err "Ошибка" ;;
       0) return ;;
     esac
     wait_key
   done
 }
 
-# ─── Namespaces ──────────────────────────────────────────────
+# ─── Namespaces (Deprecated) ─────────────────────────────────
 ns_menu() {
-  while true; do
-    clear; hdr; menu "📁  Namespaces" \
-      "Список" \
-      "Создать" \
-      "Переименовать" \
-      "Удалить"
-
-    read -rp "  Выбор [0-4]: " c
-    case "$c" in
-      1) hsj namespaces list | jq -r '.[] | "\(.id)  \(.name)"' 2>/dev/null || err "Ошибка" ;;
-      2) local n; n=$(ask "Имя namespace")
-         [[ -z "$n" ]] && continue
-         hs namespaces create "$n" && ok "Создан" || err "Ошибка" ;;
-      3) local old new; old=$(ask "Текущее имя"); new=$(ask "Новое имя")
-         [[ -z "$old" || -z "$new" ]] && continue
-         hs namespaces rename "$old" "$new" && ok "Переименован" || err "Ошибка" ;;
-      4) local n; n=$(ask "Имя")
-         [[ -z "$n" ]] && continue
-         read -rp "  Удалить $n? [y/N]: " yn
-         [[ "$yn" =~ ^[yY] ]] && { hs namespaces delete "$n" && ok "Удалён" || err "Ошибка"; } ;;
-      0) return ;;
-    esac
-    wait_key
-  done
+  echo -e "${YELLOW}  Внимание: Namespaces теперь называются Users.${NC}"
+  users_menu
 }
 
 # ─── Главное меню ────────────────────────────────────────────
@@ -260,22 +236,20 @@ main() {
   while true; do
     clear; hdr
     echo ""
-    echo -e "  ${GREEN}1${NC}) Узлы"
-    echo -e "  ${GREEN}2${NC}) Пользователи"
-    echo -e "  ${GREEN}3${NC}) Маршруты"
-    echo -e "  ${GREEN}4${NC}) Теги"
-    echo -e "  ${GREEN}5${NC}) Ключи"
-    echo -e "  ${GREEN}6${NC}) Namespaces"
+    echo -e "  ${GREEN}1${NC}) Узлы (Nodes)"
+    echo -e "  ${GREEN}2${NC}) Пользователи (Users)"
+    echo -e "  ${GREEN}3${NC}) Маршруты (Routes)"
+    echo -e "  ${GREEN}4${NC}) Теги (Tags)"
+    echo -e "  ${GREEN}5${NC}) Ключи (Keys)"
     echo -e "  ${GREEN}0${NC}) Выход"
     echo ""
-    read -rp "  Выбор [0-6]: " c
+    read -rp "  Выбор [0-5]: " c
     case "$c" in
       1) nodes_menu ;;
       2) users_menu ;;
       3) routes_menu ;;
       4) tags_menu ;;
       5) keys_menu ;;
-      6) ns_menu ;;
       0) echo -e "  ${GREEN}Пока!${NC}"; exit 0 ;;
     esac
   done
