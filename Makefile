@@ -22,6 +22,10 @@ test:
 	@bash -n hscli
 	@echo "Синтаксис OK"
 
+test-integration:
+	@chmod +x tests/*.sh
+	@./tests/test_interaction.sh
+
 lint:
 	@command -v shellcheck &>/dev/null || { echo "Установите shellcheck"; exit 1; }
 	@shellcheck hscli
