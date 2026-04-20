@@ -6,6 +6,12 @@
 
 set -euo pipefail
 
+# Загрузка переменных окружения
+if [[ -f .env ]]; then
+  # shellcheck disable=SC1091
+  source .env
+fi
+
 VERSION="v0.3.1"
 CONTAINER="${HEADSCALE_CONTAINER:-headscale}"
 SSH_HOST="${HEADSCALE_SSH:-}"
