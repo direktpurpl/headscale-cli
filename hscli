@@ -64,7 +64,8 @@ err() { echo -e "  ${RED}❌ $*${NC}"; }
 nodes_menu() {
   while true; do
     clear; hdr; menu "🖥  Узлы (Nodes)" \
-      "Список узлов" \
+      "Список всех узлов" \
+      "Только онлайн узлы" \
       "Зарегистрировать узел" \
       "Информация об узле" \
       "Переименовать узел" \
@@ -72,29 +73,30 @@ nodes_menu() {
       "Истечь срок ключа" \
       "Удалить узел"
 
-    read -rp "  Выбор [0-7]: " c
+    read -rp "  Выбор [0-8]: " c
     case "$c" in
-      1) hsj nodes list | jq -r '.[] | "\(.id)  \(.name)  \(.ip_addresses // [] | join(", "))  \(.user.name // .user // "-")"' 2>/dev/null || err "Ошибка" ;;
-      2) local key ns
+      1) hsj nodes list | jq -r '(.[] | "\(.id)\t\(.name)\t\(.ip_addresses // [] | join(", "))\t\(.user.name // .user // "-")\t\(if .online then "🟢" else "🔴" end)")' 2>/dev/null | column -t -s $'\t' || err "Ошибка" ;;
+      2) hsj nodes list | jq -r '(.[] | select(.online) | "\(.id)\t\(.name)\t\(.ip_addresses // [] | join(", "))\t\(.user.name // .user // "-")\t🟢")' 2>/dev/null | column -t -s $'\t' || err "Ошибка" ;;
+      3) local key ns
          key=$(ask "Ключ регистрации (с клиента)")
          [[ -z "$key" ]] && continue
          ns=$(ask "Пользователь (User)")
          [[ -z "$ns" ]] && continue
          hs nodes register --key "$key" --user "$ns" && ok "Узел зарегистрирован" || err "Ошибка" ;;
-      3) local id; id=$(ask "ID или имя узла")
+      4) local id; id=$(ask "ID или имя узла")
          [[ -z "$id" ]] && continue
          hsj nodes list | jq --arg i "$id" '.[] | select((.id|tostring)==$i or .name==$i)' 2>/dev/null || err "Не найден" ;;
-      4) local id nw; id=$(ask "ID узла"); nw=$(ask "Новое имя")
+      5) local id nw; id=$(ask "ID узла"); nw=$(ask "Новое имя")
          [[ -z "$id" || -z "$nw" ]] && continue
          hs nodes rename --identifier "$id" "$nw" && ok "Переименован" || err "Ошибка" ;;
-      5) local id ns; id=$(ask "ID узла"); ns=$(ask "Новый пользователь")
+      6) local id ns; id=$(ask "ID узла"); ns=$(ask "Новый пользователь")
          [[ -z "$id" || -z "$ns" ]] && continue
          echo -e "${YELLOW}  Внимание: в новых версиях Headscale перемещение узлов может быть не поддерживается.${NC}"
          hs nodes move --identifier "$id" --user "$ns" && ok "Перемещён" || err "Ошибка (возможно команда удалена)" ;;
-      6) local id; id=$(ask "ID узла")
+      7) local id; id=$(ask "ID узла")
          [[ -z "$id" ]] && continue
          hs nodes expire --identifier "$id" && ok "Ключ истёк" || err "Ошибка" ;;
-      7) local id; id=$(ask "ID узла")
+      8) local id; id=$(ask "ID узла")
          [[ -z "$id" ]] && continue
          read -rp "  Удалить узел $id? [y/N]: " yn
          [[ "$yn" =~ ^[yY] ]] && { hs nodes delete --identifier "$id" && ok "Удалён" || err "Ошибка"; } ;;
@@ -170,7 +172,7 @@ tags_menu() {
 
     read -rp "  Выбор [0-3]: " c
     case "$c" in
-      1) hsj nodes list | jq -r '.[] | "\(.id)  \(.name)  \(.tags // [] | join(", ") // "-")"' 2>/dev/null || err "Ошибка" ;;
+      1) hsj nodes list | jq -r '(.[] | "\(.id)\t\(.name)\t\(.tags // [] | join(", ") // "-")\t\(if .online then "🟢" else "🔴" end)")' 2>/dev/null | column -t -s $'\t' || err "Ошибка" ;;
       2) local id tags; id=$(ask "ID узла"); tags=$(ask "Теги через запятую (tag:web,tag:prod)")
          [[ -z "$id" || -z "$tags" ]] && continue
          hs nodes tag --identifier "$id" --tags "$tags" && ok "Теги установлены" || err "Ошибка" ;;

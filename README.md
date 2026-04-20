@@ -31,6 +31,7 @@
 
 - `docker`
 - `jq`
+- `column` (из bsdmainutils или util-linux)
 - `bash` ≥ 4.0
 
 ## ENV-переменные

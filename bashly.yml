@@ -46,6 +46,11 @@ commands:
   - name: list
     alias: ls
     help: "Показать список узлов"
+    flags:
+    - long: --online
+      short: -o
+      type: bool
+      help: "Показать только онлайн узлы"
   - name: register
     help: "Зарегистрировать новый узел"
     flags:
