@@ -6,24 +6,34 @@
 
 set -euo pipefail
 
-VERSION="v0.3.0"
+VERSION="v0.3.1"
 CONTAINER="${HEADSCALE_CONTAINER:-headscale}"
+SSH_HOST="${HEADSCALE_SSH:-}"
 
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+hs() {
+  if [[ -n "$SSH_HOST" ]]; then
+    ssh "$SSH_HOST" docker exec "$CONTAINER" headscale "$@" 2>&1
+  else
+    docker exec "$CONTAINER" headscale "$@" 2>&1
+  fi
+}
 
-hs() { docker exec "$CONTAINER" headscale "$@" 2>&1; }
-hsj() { hs --output json "$@" 2>/dev/null; }
+hsj() {
+  if [[ -n "$SSH_HOST" ]]; then
+    ssh "$SSH_HOST" docker exec "$CONTAINER" headscale --output json "$@" 2>/dev/null
+  else
+    docker exec "$CONTAINER" headscale --output json "$@" 2>/dev/null
+  fi
+}
 
 sep() { echo -e "${CYAN}────────────────────────────────────────${NC}"; }
 
 hdr() {
   echo ""
   sep
-  echo -e "  ${GREEN}Headscale CLI${NC} ${VERSION}  │  контейнер: ${YELLOW}${CONTAINER}${NC}"
+  local target="${CONTAINER}"
+  [[ -n "$SSH_HOST" ]] && target="${YELLOW}${SSH_HOST}${NC}:${CONTAINER}"
+  echo -e "  ${GREEN}Headscale CLI${NC} ${VERSION}  │  цель: ${YELLOW}${target}${NC}"
   sep
 }
 
@@ -230,9 +240,17 @@ ns_menu() {
 
 # ─── Главное меню ────────────────────────────────────────────
 main() {
-  if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-    echo -e "${RED}Контейнер '${CONTAINER}' не запущен${NC}"
-    exit 1
+  local check_cmd="docker ps --format '{{.Names}}' | grep -q \"^${CONTAINER}$\""
+  if [[ -n "$SSH_HOST" ]]; then
+    if ! ssh "$SSH_HOST" "$check_cmd" 2>/dev/null; then
+      echo -e "${RED}Ошибка: Контейнер '${CONTAINER}' не найден на сервере ${SSH_HOST}${NC}"
+      exit 1
+    fi
+  else
+    if ! eval "$check_cmd" 2>/dev/null; then
+      echo -e "${RED}Ошибка: Контейнер '${CONTAINER}' не запущен локально${NC}"
+      exit 1
+    fi
   fi
 
   while true; do
@@ -243,18 +261,27 @@ main() {
     echo -e "  ${GREEN}3${NC}) Маршруты (Routes)"
     echo -e "  ${GREEN}4${NC}) Теги (Tags)"
     echo -e "  ${GREEN}5${NC}) Ключи (Keys)"
+    echo -e "  ${GREEN}6${NC}) Статус системы (Диагностика)"
     echo -e "  ${GREEN}0${NC}) Выход"
     echo ""
-    read -rp "  Выбор [0-5]: " c
+    read -rp "  Выбор [0-6]: " c
     case "$c" in
       1) nodes_menu ;;
       2) users_menu ;;
       3) routes_menu ;;
       4) tags_menu ;;
       5) keys_menu ;;
+      6) echo -e "${YELLOW}  Версия Headscale:${NC}"
+         hs version
+         echo -e "\n${YELLOW}  Статус БД:${NC}"
+         hs nodes list >/dev/null && ok "Соединение с БД в норме" || err "Ошибка БД"
+         ;;
       0) echo -e "  ${GREEN}Пока!${NC}"; exit 0 ;;
     esac
+    [[ "$c" == "6" ]] && wait_key
   done
 }
 
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

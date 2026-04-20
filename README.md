@@ -39,7 +39,17 @@
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `HEADSCALE_CONTAINER` | `headscale` | Имя Docker-контейнера |
+| `HEADSCALE_SSH` | _(пусто)_ | SSH-хост (например, `user@host`) для удаленного управления |
 | `HEADSCALE_NAMESPACE` | _(пусто)_ | Namespace по умолчанию |
+
+## Удаленное управление
+
+Если Headscale запущен на другом сервере, укажите его SSH-хост:
+
+```bash
+export HEADSCALE_SSH="direkt@100.64.0.2"
+./hscli
+```
 
 ## Структура
 
